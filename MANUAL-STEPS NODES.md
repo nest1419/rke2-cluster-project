@@ -1,4 +1,5 @@
 Manual Configuration Steps – RKE2 Cluster
+
 🔧 Configuración Manual de los Nodos
 Estos pasos fueron realizados manualmente en las instancias EC2 creadas con Terraform para instalar y unir los nodos al clúster RKE2. El entorno incluye 3 nodos master, 2 nodos worker y 1 nodo balanceador (NGINX).
 

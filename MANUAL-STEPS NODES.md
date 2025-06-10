@@ -1,13 +1,68 @@
-Manual Configuration Steps – RKE2 Cluster
+# Manual Configuration Steps – RKE2 Cluster
 
-🔧 Configuración Manual de los Nodos
-Estos pasos fueron realizados manualmente en las instancias EC2 creadas con Terraform para instalar y unir los nodos al clúster RKE2. El entorno incluye 3 nodos master, 2 nodos worker y 1 nodo balanceador (NGINX).
+Este documento describe los pasos manuales que se realizaron para configurar los nodos master, worker, el balanceador con NGINX y la instalación de Argo CD.
 
-1️⃣ Balanceador – lb (NGINX)
-Sistema Operativo: Ubuntu 24.04 LTS
-Instalación automática con Ansible:
+---
+
+## 🔹 Nodos Master
+
+### Requisitos previos (en cada master)
+```bash
+sudo hostnamectl set-hostname masterX      # X = 1, 2, 3
+sudo apt update && sudo apt upgrade -y
+
+Instalación de RKE2 Server (en master1)
+curl -sfL https://get.rke2.io | sudo INSTALL_RKE2_TYPE="server" sh -
+sudo mkdir -p /etc/rancher/rke2
+
+# Archivo de configuración /etc/rancher/rke2/config.yaml
+token: <TOKEN_COMPARTIDO>
+tls-san:
+  - <IP_PÚBLICA_LB>
+sudo systemctl enable rke2-server.service
+sudo systemctl start rke2-server.service
+
+Obtener el token (en master1)
+sudo cat /var/lib/rancher/rke2/server/node-token
+
+master2 y master3
+curl -sfL https://get.rke2.io | sudo INSTALL_RKE2_TYPE="server" sh -
+sudo mkdir -p /etc/rancher/rke2
+
+# Archivo /etc/rancher/rke2/config.yaml
+server: https://<IP_PRIVADA_LB>:9345
+token: <TOKEN_DEL_MASTER1>
+tls-san:
+  - <IP_PÚBLICA_LB>
+
+sudo systemctl enable rke2-server.service
+sudo systemctl start rke2-server.service
+
+🔹 Nodos Worker
+
+Preparación
+sudo hostnamectl set-hostname workerX
+sudo apt update && sudo apt upgrade -y
+
+Instalación de RKE2 Agent
+curl -sfL https://get.rke2.io | sudo INSTALL_RKE2_TYPE="agent" sh -
+sudo mkdir -p /etc/rancher/rke2
+
+# Archivo /etc/rancher/rke2/config.yaml
+server: https://<IP_PRIVADA_LB>:9345
+token: <TOKEN_DEL_MASTER1>
+
+sudo systemctl enable rke2-agent.service
+sudo systemctl start rke2-agent.service
+
+🔹 Balanceador NGINX
+Instalación con Ansible
+Playbook nginx-install.yml automatiza la instalación desde Ubuntu:
+
 ansible-playbook -i inventory.ini nginx-install.yml
-Archivo de configuración /etc/nginx/nginx.conf:
+
+Archivo /etc/nginx/nginx.conf
+
 worker_processes auto;
 events {
     worker_connections 1024;
@@ -40,18 +95,37 @@ stream {
         server 10.0.1.39:30081;
     }
 
-    server { listen 9443; proxy_pass argocd; }
-    server { listen 6443; proxy_pass rke2_api; }
-    server { listen 9345; proxy_pass rke2_control; }
-    server { listen 9080; proxy_pass nodejs_app; }
-    server { listen 9081; proxy_pass nodejs2; }
+    server {
+        listen 6443;
+        proxy_pass rke2_api;
+    }
+
+    server {
+        listen 9345;
+        proxy_pass rke2_control;
+    }
+
+    server {
+        listen 9443;
+        proxy_pass argocd;
+    }
+
+    server {
+        listen 9080;
+        proxy_pass nodejs_app;
+    }
+
+    server {
+        listen 9081;
+        proxy_pass nodejs2;
+    }
 }
 
 http {
-    include mime.types;
-    default_type application/octet-stream;
-    sendfile on;
-    keepalive_timeout 65;
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
 
     server {
         listen 80;
@@ -62,64 +136,64 @@ http {
     }
 }
 
-2️⃣ Master 1
-Sistema Operativo: Ubuntu 24.04 LTS
-Instalación de RKE2 server:
-curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=server sh -
-Configuración:
-mkdir -p /etc/rancher/rke2
-nano /etc/rancher/rke2/config.yaml
+🔹 Argo CD
+Instalación
 
-write-kubeconfig-mode: "0644"
-tls-san:
-  - 98.84.108.255
-token: rke2-cluster-secret-token
-node-taint:
-  - "CriticalAddonsOnly=true:NoExecute"
-
-Inicio:
-systemctl enable rke2-server --now
-
-3️⃣ Master 2 y Master 3
-Mismos pasos que Master 1, con esta diferencia en la config:
-server: https://<IP_DEL_BALANCER>:6443
-
-Y luego:
-systemctl enable rke2-server --now
-
-4️⃣ Worker 1 y Worker 2
-Sistema Operativo: Ubuntu 24.04 LTS
-Instalación de RKE2 agent:
-curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent sh -
-
-Configuración:
-mkdir -p /etc/rancher/rke2
-nano /etc/rancher/rke2/config.yaml
-
-server: https://<IP_DEL_BALANCER>:6443
-token: rke2-cluster-secret-token
-
-Inicio:
-systemctl enable rke2-agent --now
-
-5️⃣ Validación desde master1
-kubectl get nodes
-
-6️⃣ Instalación de Argo CD
-Instalación:
 kubectl create namespace argocd
+
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-Exponer ArgoCD por NodePort (ejemplo):
-kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "NodePort"}}'
+Obtener contraseña inicial
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
 
-Obtener contraseña:
-kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
+Acceso por Web
+Puerto en NGINX: 9443
+URL: https://<IP_PÚBLICA_LB>:9443
 
-7️⃣ Despliegue de Aplicaciones vía Argo CD
-Se crearon dos apps Node.js con 3 réplicas cada una.
-Expuestas por NodePort y balanceadas vía NGINX:
+🔹 Despliegue de Aplicaciones con Argo CD
 
-http://98.84.108.255:9080 → App 1
-http://98.84.108.255:9081 → App 2
+nodejs-app
+# apps/nodejs-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nodejs-app
+  namespace: argocd
+spec:
+  destination:
+    namespace: default
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: app
+    repoURL: https://github.com/nest1419/rke2.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
 
+nodejs-app2
+# apps/nodejs-app2.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nodejs-app2
+  namespace: argocd
+spec:
+  destination:
+    namespace: default
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: app2
+    repoURL: https://github.com/nest1419/rke2.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+ Verificaciones finales
+curl http://localhost:9080  # App 1
+curl http://localhost:9081  # App 2

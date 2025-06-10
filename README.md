@@ -1,94 +1,91 @@
-# Proyecto: Clúster Kubernetes RKE2 en AWS con Argo CD, NGINX y Node.js Apps
+# RKE2 Kubernetes Cluster en AWS con Terraform, Ansible y Argo CD
 
-Este proyecto implementa un clúster de Kubernetes basado en **RKE2** sobre instancias EC2 en **AWS**, utilizando Terraform para la infraestructura, Ansible para la configuración del balanceador NGINX y Argo CD para el despliegue GitOps de aplicaciones Node.js.
+Este proyecto despliega un clúster de Kubernetes basado en **RKE2 (Rancher Kubernetes Engine 2)** en **AWS**, utilizando **Terraform** para la infraestructura, **Ansible** para configurar el balanceador NGINX, y **Argo CD** como gestor GitOps para desplegar aplicaciones Node.js.
 
-## 📦 Arquitectura del Proyecto
+---
 
-+-------------------+ +----------------------+ +---------------------+
-| Usuario (web) | <---> | NGINX (LB - EC2) | <---> | Kubernetes RKE2 |
-| | | IP Pública: x.x.x.x | | (3 masters + 2 workers)|
-+-------------------+ +----------------------+ +---------------------+
-|
-|--> Puerto 9080 -> App Node.js 1
-|--> Puerto 9081 -> App Node.js 2
-|--> Puerto 9443 -> Argo CD (UI)
+## 🧱 Arquitectura
 
+- **3 Nodos Master** (RKE2 control-plane)
+- **2 Nodos Worker**
+- **1 Nodo Balanceador (lb)** con **NGINX Open Source** (modo stream TCP)
+- **1 VPC personalizada** con:
+  - Subnet pública (para acceso SSH, lb, etc.)
+  - Subnet privada (comunicación interna)
+- **Security Groups configurados**
+  - Acceso SSH (puerto 22)
+  - API RKE2 (puerto 6443)
+  - Canal de control RKE2 (puerto 9345)
+  - NodePorts de apps y ArgoCD
+  - Puertos balanceados: `9080`, `9081`, `9443`
 
-## ☁️ Infraestructura AWS
+---
 
-- VPC con subred pública y privada
-- 6 Instancias EC2 (Ubuntu 24.04 LTS):
-  - 1 LB: NGINX como balanceador TCP
-  - 3 Masters: RKE2 server
-  - 2 Workers: RKE2 agent
-- Security Groups configurados para habilitar puertos 22, 6443, 9345, 9080, 9081 y 9443
+## 🛠️ Herramientas usadas
 
-## ⚙️ Herramientas Utilizadas
+- **Terraform**: Infraestructura en AWS (EC2, VPC, SG, subnets)
+- **Ansible**: Instalación y configuración de NGINX
+- **NGINX Open Source**: Balanceo TCP para RKE2 y aplicaciones
+- **RKE2**: Instalado manualmente en cada nodo
+- **Argo CD**: Instalado vía manifest y accesible públicamente
+- **Node.js**: Dos aplicaciones desplegadas usando GitOps
 
-- [Terraform](https://www.terraform.io/) – Infraestructura como código
-- [Ansible](https://www.ansible.com/) – Configuración de NGINX
-- [RKE2](https://docs.rke2.io/) – Kubernetes empresarial de Rancher
-- [Argo CD](https://argo-cd.readthedocs.io/) – GitOps para Kubernetes
-- [NGINX](https://nginx.org/) – Balanceador de carga TCP/HTTP
-- [DockerHub](https://hub.docker.com/) – Almacenamiento de imágenes
+---
 
-## 🚀 Aplicaciones Desplegadas
+## 📁 Estructura del repositorio
 
-### Node.js App 1
+infra/aws/rke2-cluster/
+├── terraform/ # Código Terraform (VPC, EC2, SG, etc.)
+│ └── modules/
+│ ├── ec2/
+│ └── vpc/
+├── ansible/
+│ ├── inventory.ini # Inventario para Ansible (lb)
+│ ├── nginx-install.yml # Playbook para instalar NGINX
+│ └── files/nginx.conf # Configuración completa de NGINX
+├── scripts/
+│ └── rke2-install.sh # Script base de instalación para RKE2
+├── README.md
+└── MANUAL-STEPS NODES.md # Pasos manuales para unir masters y workers
 
-- Desplegada vía Argo CD
-- Acceso: `http://<IP_LB>:9080`
-- Imagen: `jrmartinezreluz/nodejs-app:latest`
+---
 
-### Node.js App 2
+## 🚀 Despliegue de aplicaciones con Argo CD
 
-- Desplegada vía Argo CD
-- Acceso: `http://<IP_LB>:9081`
-- Imagen: `jrmartinezreluz/nodejs-app2:latest`
+Se crearon dos apps simples con Node.js:
 
-## 🧩 Estructura del Repositorio
+- **App 1:** `http://<IP_LB>:9080`
+- **App 2:** `http://<IP_LB>:9081`
 
-rke2/
-├── ansible/ # Configuración automática de NGINX
-├── apps/ # Manifiestos declarativos de Argo CD
-│ ├── nodejs-app.yaml
-│ └── nodejs-app2.yaml
-├── docker/ # Archivos Docker de las apps
-│ ├── nodejs-app/
-│ │ ├── Dockerfile
-│ │ ├── index.js
-│ │ └── package.json
-│ └── nodejs-app2/
-│ ├── Dockerfile
-│ ├── index.js
-│ └── package.json
-├── terraform/ # Infraestructura en AWS
-│ ├── main.tf
-│ └── variables.tf
-└── README.md
+El manifiesto declarativo de Argo CD (`Application`) para cada app está versionado en el mismo repositorio.
 
-## 🔐 Acceso a Argo CD
+---
+
+## 🔑 Acceso a Argo CD
 
 - URL: `https://<IP_LB>:9443`
 - Usuario: `admin`
-- Contraseña: obtenida desde:
-  ```bash
-  kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-  
-📦 Deploy GitOps
-Argo CD detecta cambios en los manifiestos YAML ubicados en apps/ y los sincroniza automáticamente con el clúster.
+- Contraseña: Obtenida desde el secret en el namespace `argocd`:
 
-🧪 Validación
-Desde el LB puedes validar los servicios:
-curl http://localhost:9080     # Node.js App 1
-curl http://localhost:9081     # Node.js App 2
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 
-O desde fuera del entorno:
-curl http://<IP_LB>:9080
-curl http://<IP_LB>:9081
+📝 Notas adicionales
+El clúster fue construido con enfoque de producción simulado.
 
-📬 Contacto
+No se usó Ingress Controller HTTP; el balanceo se realiza con NGINX modo TCP (stream).
+
+Toda la infraestructura es compatible con el AWS Free Tier.
+
+📌 Requisitos previos
+Cuenta en AWS
+
+Docker + Git + Terraform + Ansible instalados
+
+VSCode con WSL (Ubuntu) o sistema Linux
+
+Docker Hub para subir imágenes Node.js
+
+📤 Autor
 José Rogelio Martínez
-Cloud Architect & IT Infrastructure Specialist
-📞 +507 6363-6738
-✉️ jrmartinezreluz@gmail.com
+Cloud & Infrastructure Architect
